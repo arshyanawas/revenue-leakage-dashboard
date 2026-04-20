@@ -24,9 +24,9 @@ The goal of this project is to identify **where profit is lost and how to improv
 
 #  Analysis & Insights
 
-## 🌍 Sales Across India
+## Sales Across India
 
-![Sales Map](visualizations/Map.png)
+![Line](visualizations/Line.png)
 
 ** Path:**
 
@@ -79,7 +79,7 @@ Combine revenue with profit analysis to identify high-value categories.
 
 ![Bar](visualizations/Bar.png)
 
-**📁 Path:**
+**Path:**
 
 ```text
 visualizations/Bar.png
