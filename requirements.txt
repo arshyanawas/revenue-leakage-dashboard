@@ -1,4 +1,13 @@
 streamlit
 pandas
+<<<<<<< HEAD
 plotly
 numpy
+=======
+numpy
+matplotlib
+seaborn
+plotly
+mysql-connector-python
+python-dotenv
+>>>>>>> c7cf0650b1b2f9d37cbd58369d8ed58fcd350c8d
