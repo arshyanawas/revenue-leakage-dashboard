@@ -1,6 +1,10 @@
-##  Live Demo
-[Open Dashboard](https://arshya-profitability-analytics.streamlit.app/)
+![Python](https://img.shields.io/badge/Python-3.11-blue)
+![MySQL](https://img.shields.io/badge/MySQL-Database-orange)
+![Streamlit](https://img.shields.io/badge/Streamlit-Dashboard-red)
+![Business Intelligence](https://img.shields.io/badge/Domain-Business_Intelligence-green)
+![SQL](https://img.shields.io/badge/SQL-Analytics-blue)
 
+[![Live App](https://img.shields.io/badge/Streamlit-Live_App-red)](https://arshya-profitability-analytics.streamlit.app/)
 # Revenue Leakage & Profitability Analytics Dashboard
 
 
