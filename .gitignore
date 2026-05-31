@@ -1,0 +1,13 @@
+# /passwords
+.env
+
+# python
+__pycache__/
+*.pyc
+
+
+data/raw/
+
+# system files
+.DS_Store
+Thumbs.db
