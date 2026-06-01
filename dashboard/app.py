@@ -1,112 +1,170 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import sqlite3
 
-
-# -------------------------------
-# Page setup
-# -------------------------------
-st.set_page_config(page_title="Sales Dashboard", layout="wide")
+# -----------------------------------
+# PAGE CONFIG
+# -----------------------------------
+st.set_page_config(
+    page_title="Revenue Leakage Dashboard",
+    layout="wide"
+)
 
 st.markdown("""
 <style>
-.main {background-color: #f8fafc;}
-.block-container {padding-top: 2rem;}
+.main {
+    background-color: #f8fafc;
+}
+
+.block-container {
+    padding-top: 2rem;
+}
+
+.metric-card {
+    background-color: white;
+    padding: 1rem;
+    border-radius: 10px;
+}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Sales and Revenue Dashboard")
+st.title("Revenue Leakage & Profitability Dashboard")
 
+# -----------------------------------
+# DATABASE CONNECTION
+# -----------------------------------
+@st.cache_resource
+def get_connection():
+    conn = sqlite3.connect("data/sales.db", check_same_thread=False)
+    return conn
 
+conn = get_connection()
 
-# ------------------------------
-# Load data
-# -------------------------------
+# -----------------------------------
+# LOAD DATA
+# -----------------------------------
 @st.cache_data
 def load_data():
-    df = pd.read_csv("dashboard/sales_data.csv")
-    return df
+    query = "SELECT * FROM orders"
+    return pd.read_sql_query(query, conn)
 
-df = load_data()   
+df = load_data()
 
-# -------------------------------
-# Filters
-# -------------------------------
+# -----------------------------------
+# FILTERS
+# -----------------------------------
 st.subheader("Filters")
 
 c1, c2 = st.columns(2)
 
 with c1:
-    region = st.multiselect(
-        "Region",
-        df["region"].unique(),
+    selected_region = st.multiselect(
+        "Select Region",
+        options=df["region"].unique(),
         default=df["region"].unique()
     )
 
 with c2:
-    category = st.multiselect(
-        "Category",
-        df["product_category"].unique(),
+    selected_category = st.multiselect(
+        "Select Category",
+        options=df["product_category"].unique(),
         default=df["product_category"].unique()
     )
 
-# ✅ CREATE filtered_df BEFORE USING
-filtered_df = df[
-    (df["region"].isin(region)) &
-    (df["product_category"].isin(category))
-].copy()
+# -----------------------------------
+# FILTER QUERY
+# -----------------------------------
+region_str = "','".join(selected_region)
+category_str = "','".join(selected_category)
 
-# -------------------------------
-# Helpers
-# -------------------------------
+base_query = f"""
+SELECT *
+FROM orders
+WHERE region IN ('{region_str}')
+AND product_category IN ('{category_str}')
+"""
+
+filtered_df = pd.read_sql_query(base_query, conn)
+
+# -----------------------------------
+# HELPERS
+# -----------------------------------
 def format_inr(x):
-    if x >= 1_00_00_000:
+    if abs(x) >= 1_00_00_000:
         return f"₹{x/1_00_00_000:.2f} Cr"
-    elif x >= 1_00_000:
+    elif abs(x) >= 1_00_000:
         return f"₹{x/1_00_000:.2f} L"
     else:
         return f"₹{x:,.0f}"
 
-def rupee_axis(fig):
-    fig.update_layout(
-        yaxis_tickprefix="₹",
-        yaxis_tickformat=",",
-        separators=","
-    )
-    return fig
+# -----------------------------------
+# KPI SECTION
+# -----------------------------------
+kpi_query = f"""
+SELECT
+    SUM(sales_amount) AS total_revenue,
+    SUM(profit) AS total_profit,
+    ROUND(SUM(profit) * 100.0 / SUM(sales_amount), 2) AS margin_pct
+FROM (
+    {base_query}
+)
+"""
 
-# -------------------------------
-# KPI metrics
-# -------------------------------
-total_revenue = filtered_df["sales_amount"].sum()
-total_profit = filtered_df["profit"].sum()
-margin = (total_profit / total_revenue) * 100 if total_revenue else 0
+kpi_df = pd.read_sql_query(kpi_query, conn)
+
+total_revenue = kpi_df["total_revenue"][0]
+total_profit = kpi_df["total_profit"][0]
+margin_pct = kpi_df["margin_pct"][0]
 
 k1, k2, k3 = st.columns(3)
 
-k1.metric("Revenue", format_inr(total_revenue))
-k2.metric("Profit", format_inr(total_profit))
-k3.metric("Margin %", f"{margin:.2f}%")
+k1.metric("Total Revenue", format_inr(total_revenue))
+k2.metric("Total Profit", format_inr(total_profit))
+k3.metric("Profit Margin %", f"{margin_pct:.2f}%")
 
-# -------------------------------
-# Loss metrics
-# -------------------------------
-loss_df = filtered_df[filtered_df["profit"] < 0]
-loss = loss_df["profit"].sum()
-leak_pct = abs(loss) / total_revenue * 100 if total_revenue else 0
+# -----------------------------------
+# LOSS METRICS
+# -----------------------------------
+loss_query = f"""
+SELECT *
+FROM (
+    {base_query}
+)
+WHERE profit < 0
+"""
+
+loss_df = pd.read_sql_query(loss_query, conn)
+
+total_loss = loss_df["profit"].sum()
+
+leakage_pct = (
+    abs(total_loss) / total_revenue * 100
+    if total_revenue != 0 else 0
+)
 
 l1, l2, l3 = st.columns(3)
 
-l1.metric("Loss", format_inr(loss))
+l1.metric("Revenue Leakage", format_inr(total_loss))
 l2.metric("Loss Orders", len(loss_df))
-l3.metric("Leakage %", f"{leak_pct:.2f}%")
+l3.metric("Leakage %", f"{leakage_pct:.2f}%")
 
-# -------------------------------
-# Map
-# -------------------------------
-st.subheader("Sales Across India")
+# -----------------------------------
+# REGION MAP
+# -----------------------------------
+st.subheader("Regional Sales Performance")
 
-map_df = filtered_df.groupby("region")["sales_amount"].sum().reset_index()
+map_query = f"""
+SELECT
+    region,
+    SUM(sales_amount) AS sales_amount
+FROM (
+    {base_query}
+)
+GROUP BY region
+"""
+
+map_df = pd.read_sql_query(map_query, conn)
 
 region_coords = {
     "North": {"lat": 28.6, "lon": 77.2},
@@ -118,7 +176,7 @@ region_coords = {
 map_df["lat"] = map_df["region"].map(lambda x: region_coords[x]["lat"])
 map_df["lon"] = map_df["region"].map(lambda x: region_coords[x]["lon"])
 
-fig = px.scatter_geo(
+fig_map = px.scatter_geo(
     map_df,
     lat="lat",
     lon="lon",
@@ -128,75 +186,195 @@ fig = px.scatter_geo(
     projection="natural earth"
 )
 
-fig.update_geos(
+fig_map.update_geos(
     center={"lat": 22.5937, "lon": 78.9629},
     projection_scale=5,
     showcountries=True,
-    showland=True,
-    landcolor="rgb(240,240,240)"
+    showland=True
 )
 
-fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+fig_map.update_layout(
+    margin={"r": 0, "t": 0, "l": 0, "b": 0}
+)
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig_map, use_container_width=True)
 
-# -------------------------------
-# Donut chart
-# -------------------------------
-st.subheader("Revenue Distribution")
+# -----------------------------------
+# REVENUE DISTRIBUTION
+# -----------------------------------
+st.subheader("Revenue Distribution by Category")
 
-cat_df = filtered_df.groupby("product_category")["sales_amount"].sum().reset_index()
+category_query = f"""
+SELECT
+    product_category,
+    SUM(sales_amount) AS sales_amount
+FROM (
+    {base_query}
+)
+GROUP BY product_category
+"""
 
-fig = px.pie(cat_df, names="product_category", values="sales_amount", hole=0.6)
-st.plotly_chart(fig, use_container_width=True)
+category_df = pd.read_sql_query(category_query, conn)
 
-# -------------------------------
-# Profit chart
-# -------------------------------
+fig_donut = px.pie(
+    category_df,
+    names="product_category",
+    values="sales_amount",
+    hole=0.6
+)
+
+st.plotly_chart(fig_donut, use_container_width=True)
+
+# -----------------------------------
+# PROFIT ANALYSIS
+# -----------------------------------
 st.subheader("Profit by Category")
 
-bar_df = filtered_df.groupby("product_category")["profit"].sum().reset_index()
+profit_query = f"""
+SELECT
+    product_category,
+    SUM(profit) AS profit
+FROM (
+    {base_query}
+)
+GROUP BY product_category
+ORDER BY profit DESC
+"""
 
-fig = px.bar(bar_df, x="product_category", y="profit", text="profit")
-fig.update_traces(texttemplate="₹%{text:,.0f}", textposition="outside")
-fig = rupee_axis(fig)
+profit_df = pd.read_sql_query(profit_query, conn)
 
-st.plotly_chart(fig, use_container_width=True)
+fig_bar = px.bar(
+    profit_df,
+    x="product_category",
+    y="profit",
+    text="profit"
+)
 
-# -------------------------------
-# Monthly trend
-# -------------------------------
-st.subheader("Monthly Trend")
+fig_bar.update_traces(
+    texttemplate="₹%{text:,.0f}",
+    textposition="outside"
+)
 
-filtered_df["order_date"] = pd.to_datetime(filtered_df["order_date"])
+st.plotly_chart(fig_bar, use_container_width=True)
 
-monthly = filtered_df.groupby(
-    filtered_df["order_date"].dt.to_period("M")
-)[["sales_amount","profit"]].sum().reset_index()
+# -----------------------------------
+# MONTHLY TREND
+# -----------------------------------
+st.subheader("Monthly Revenue & Profit Trend")
 
-monthly["order_date"] = monthly["order_date"].astype(str)
+monthly_query = f"""
+SELECT
+    strftime('%Y-%m', order_date) AS month,
+    SUM(sales_amount) AS revenue,
+    SUM(profit) AS profit
+FROM (
+    {base_query}
+)
+GROUP BY month
+ORDER BY month
+"""
 
-fig = px.line(monthly, x="order_date", y=["sales_amount","profit"], markers=True)
+monthly_df = pd.read_sql_query(monthly_query, conn)
 
-st.plotly_chart(fig, use_container_width=True)
+fig_line = px.line(
+    monthly_df,
+    x="month",
+    y=["revenue", "profit"],
+    markers=True
+)
 
-# -------------------------------
-# Insights
-# -------------------------------
-st.subheader("Insights")
+st.plotly_chart(fig_line, use_container_width=True)
 
-if not filtered_df[filtered_df["discount"] > 15].empty:
-    st.warning("High discounts are reducing profit. Reduce discounts above 15 percent.")
+# -----------------------------------
+# INSIGHTS SECTION
+# -----------------------------------
+st.subheader("Business Insights")
 
-worst_cat = filtered_df.groupby("product_category")["profit"].sum().idxmin()
-st.error(f"Worst category: {worst_cat}")
+discount_query = f"""
+SELECT
+    AVG(discount) AS avg_discount
+FROM (
+    {base_query}
+)
+"""
 
-worst_region = filtered_df.groupby("region")["profit"].sum().idxmin()
-st.info(f"Worst region: {worst_region}")
+discount_df = pd.read_sql_query(discount_query, conn)
 
-# -------------------------------
-# Loss table
-# -------------------------------
-st.subheader("Loss Making Orders")
+avg_discount = discount_df["avg_discount"][0]
 
-st.dataframe(loss_df.sort_values(by="profit"), use_container_width=True)
+if avg_discount > 15:
+    st.warning(
+        "High average discounts are negatively impacting profitability."
+    )
+
+worst_category_query = f"""
+SELECT
+    product_category,
+    SUM(profit) AS total_profit
+FROM (
+    {base_query}
+)
+GROUP BY product_category
+ORDER BY total_profit ASC
+LIMIT 1
+"""
+
+worst_category_df = pd.read_sql_query(worst_category_query, conn)
+
+worst_category = worst_category_df["product_category"][0]
+
+st.error(f"Worst Performing Category: {worst_category}")
+
+worst_region_query = f"""
+SELECT
+    region,
+    SUM(profit) AS total_profit
+FROM (
+    {base_query}
+)
+GROUP BY region
+ORDER BY total_profit ASC
+LIMIT 1
+"""
+
+worst_region_df = pd.read_sql_query(worst_region_query, conn)
+
+worst_region = worst_region_df["region"][0]
+
+st.info(f"Worst Performing Region: {worst_region}")
+
+# -----------------------------------
+# LOSS-MAKING ORDERS
+# -----------------------------------
+st.subheader("Loss-Making Orders")
+
+loss_table_query = f"""
+SELECT
+    order_id,
+    order_date,
+    product_category,
+    region,
+    sales_amount,
+    discount,
+    profit
+FROM (
+    {base_query}
+)
+WHERE profit < 0
+ORDER BY profit ASC
+"""
+
+loss_table_df = pd.read_sql_query(loss_table_query, conn)
+
+st.dataframe(
+    loss_table_df,
+    use_container_width=True
+)
+
+# -----------------------------------
+# FOOTER
+# -----------------------------------
+st.markdown("---")
+st.caption(
+    "Built using Streamlit, SQLite, SQL, Pandas, and Plotly"
+)
