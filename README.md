@@ -1,5 +1,5 @@
 ![Python](https://img.shields.io/badge/Python-3.11-blue)
-![MySQL](https://img.shields.io/badge/MySQL-Database-orange)
+![SQLite](https://img.shields.io/badge/SQLite-Database-lightgrey)
 ![Streamlit](https://img.shields.io/badge/Streamlit-Dashboard-red)
 ![Business Intelligence](https://img.shields.io/badge/Domain-Business_Intelligence-green)
 ![SQL](https://img.shields.io/badge/SQL-Analytics-blue)
@@ -8,9 +8,9 @@
 
 # Revenue Leakage & Profitability Analytics Dashboard
 
-**Business Problem:** High revenue does not always translate into strong profitability. Hidden leakages such as excessive discounting, loss-making transactions, and uneven regional performance can reduce overall business value despite healthy sales figures.
+**Business Problem:** A business generating ₹2.55 Cr in revenue is still only retaining ₹74.94 L in profit — a 29.37% margin with hidden leakage driven by excessive discounting and loss-making transactions.
 
-**Objective:** Identify profitability gaps, quantify revenue leakage, and provide actionable recommendations using SQL-driven analysis and an interactive Streamlit dashboard.
+**What this project does:** Uses SQL to locate exactly where profit is being lost, which discount bands destroy margin, and which region–category combinations are the worst offenders — then surfaces it in an interactive dashboard.
 
 ---
 
@@ -20,69 +20,48 @@ https://arshya-profitability-analytics.streamlit.app/
 
 ---
 
-## Executive Summary
+## Key Numbers
 
-This project investigates revenue leakage and profitability drivers using SQL, MySQL, Python, and Streamlit.
-
-The analysis focuses on identifying:
-
-* Loss-making transactions
-* Discount-related profit erosion
-* Regional performance differences
-* Category-level profitability trends
-* Revenue versus profit trade-offs
-
-The goal is to move beyond revenue reporting and understand which areas of the business actually generate sustainable profit.
+| Metric | Value |
+|---|---|
+| Total Revenue | ₹2.55 Cr |
+| Total Profit | ₹74.94 L |
+| Profit Margin | 29.37% |
+| Loss-Making Orders | 13 |
+| Avg Discount on Loss Orders | Analysed by discount band |
 
 ---
 
-## Key Business Metrics
+## Business Questions Answered
 
-| Metric             | Value                             |
-| ------------------ | --------------------------------- |
-| Total Revenue      | ₹2.55 Cr                          |
-| Total Profit       | ₹74.94 L                          |
-| Profit Margin      | 29.37%                            |
-| Loss-Making Orders | 13                                |
-| Revenue Leakage    | Investigated through SQL analysis |
-
-These KPIs demonstrate that while revenue remains strong, profitability must be monitored independently to identify hidden operational inefficiencies.
-
----
-
-## Business Questions
-
-The project was designed to answer the following questions:
-
-1. Which categories contribute the most profit?
-2. Are discounts reducing profitability?
-3. Which regions perform best and worst?
-4. How many transactions generate losses?
-5. Does revenue growth always translate into profit growth?
-6. Where are potential revenue leakages occurring?
+1. Which region–category combinations are leaking the most money?
+2. At what discount level does profit turn negative?
+3. Does revenue growth actually translate into profit growth month-on-month?
+4. Which payment methods have the worst profit margins?
+5. Which single segment should be fixed first to recover the most leakage?
 
 ---
 
 ## SQL Investigation
 
-The analysis was driven primarily through SQL before being visualized in Streamlit.
+All analysis is SQL-first. The Streamlit dashboard runs live `pd.read_sql_query()` calls against a SQLite database — no pre-aggregated DataFrames.
 
 ### KPI Summary
 
 ```sql
-SELECT 
-    COUNT(*) AS total_orders,
-    SUM(sales_amount) AS total_revenue,
-    SUM(profit) AS total_profit,
-    ROUND(SUM(profit) / SUM(sales_amount) * 100, 2) AS profit_margin_pct
+SELECT
+    SUM(sales_amount)                                        AS total_revenue,
+    SUM(profit)                                              AS total_profit,
+    ROUND(SUM(profit) * 100.0 / NULLIF(SUM(sales_amount),0), 2) AS margin_pct,
+    COUNT(*)                                                 AS total_orders,
+    COUNT(DISTINCT customer_id)                              AS unique_customers,
+    ROUND(AVG(sales_amount), 2)                              AS avg_order_value
 FROM orders;
 ```
 
-Used to calculate core business metrics including revenue, profit, and overall margin.
-
 ---
 
-### Revenue Leakage Analysis
+### Revenue Leakage — Loss-Making Orders
 
 ```sql
 SELECT *
@@ -91,219 +70,144 @@ WHERE profit < 0
 ORDER BY profit ASC;
 ```
 
-Used to identify loss-making transactions that directly contribute to revenue leakage.
+13 transactions are loss-making. These are the highest-priority targets for operational review.
 
 ---
 
-### Discount Impact Analysis
+### Discount Band Analysis
 
 ```sql
-SELECT 
-    product_category,
-    ROUND(AVG(discount), 2) AS avg_discount,
-    ROUND(AVG(profit), 2) AS avg_profit
+SELECT
+    CASE
+        WHEN discount = 0   THEN '0% (No Discount)'
+        WHEN discount <= 10 THEN '1–10%'
+        WHEN discount <= 20 THEN '11–20%'
+        ELSE '20%+'
+    END AS discount_bucket,
+    COUNT(*)                                                   AS orders,
+    ROUND(AVG(profit), 2)                                      AS avg_profit,
+    ROUND(SUM(profit)*100.0/NULLIF(SUM(sales_amount),0),2)    AS margin_pct,
+    COUNT(CASE WHEN profit < 0 THEN 1 END)                    AS loss_orders
 FROM orders
-GROUP BY product_category
-ORDER BY avg_discount DESC;
+GROUP BY discount_bucket
+ORDER BY MIN(discount);
 ```
 
-Used to measure how discounting influences profitability across product categories.
+Orders with discounts above 20% are disproportionately responsible for leakage. This query quantifies exactly how much margin each discount tier destroys.
 
 ---
 
-### Regional Performance Analysis
+### Worst Segments by Leakage
 
 ```sql
-SELECT 
+SELECT
+    region || ' · ' || product_category AS segment,
+    SUM(CASE WHEN profit < 0 THEN profit ELSE 0 END) AS leakage,
+    COUNT(CASE WHEN profit < 0 THEN 1 END)           AS loss_orders,
+    ROUND(SUM(profit)*100.0/NULLIF(SUM(sales_amount),0),1) AS margin_pct
+FROM orders
+GROUP BY region, product_category
+ORDER BY leakage ASC
+LIMIT 8;
+```
+
+Identifies the specific region–category combinations responsible for the most leakage. Actionable at a segment level, not just a category level.
+
+---
+
+### Profit Margin Heatmap — Region × Category
+
+```sql
+SELECT
+    region,
+    product_category,
+    ROUND(SUM(profit)*100.0/NULLIF(SUM(sales_amount),0),1) AS margin_pct
+FROM orders
+GROUP BY region, product_category;
+```
+
+Pivoted into a heatmap in the dashboard. Instantly shows which intersections are profitable vs bleeding.
+
+---
+
+### Regional Performance
+
+```sql
+SELECT
     region,
     SUM(sales_amount) AS total_sales,
-    SUM(profit) AS total_profit
+    SUM(profit)       AS total_profit,
+    ROUND(SUM(profit)*100.0/NULLIF(SUM(sales_amount),0),1) AS margin_pct
 FROM orders
 GROUP BY region
 ORDER BY total_profit DESC;
 ```
 
-Used to identify high-performing and underperforming regions.
+---
+
+### Monthly Trend — Revenue, Profit & Leakage
+
+```sql
+SELECT
+    strftime('%Y-%m', order_date)                           AS month,
+    SUM(sales_amount)                                       AS revenue,
+    SUM(profit)                                             AS profit,
+    SUM(CASE WHEN profit < 0 THEN profit ELSE 0 END)       AS leakage,
+    ROUND(SUM(profit)*100.0/NULLIF(SUM(sales_amount),0),2) AS margin_pct
+FROM orders
+GROUP BY month
+ORDER BY month;
+```
+
+Revenue is stable month-on-month. Profit fluctuates — confirming leakage is not a seasonal issue but a structural one tied to discounting behaviour.
 
 ---
 
-## Analysis & Findings
-
-### Sales Across India
-
-![Sales Map](revenue-leakage-profitability-analytics/visualizations/Map.png)
-
-#### Finding
-
-Revenue generation is uneven across regions, indicating reliance on a limited number of strong-performing markets.
-
-#### Business Impact
-
-Heavy dependence on a few regions increases operational risk and limits balanced growth opportunities.
-
-#### Recommendation
-
-Develop targeted expansion strategies for lower-performing regions while maintaining performance in established markets.
-
----
-
-### Revenue Distribution by Category
-
-![Donut](revenue-leakage-profitability-analytics/visualizations/Donut.png)
-
-#### Finding
-
-Revenue contribution is remarkably balanced across categories:
-
-* Electronics: ~25.8%
-* Furniture: ~25.6%
-* Clothing: ~25.1%
-* Grocery: ~24.6%
-
-#### Business Impact
-
-Revenue diversification reduces dependence on any single product category, improving overall business resilience.
-
-#### Recommendation
-
-Continue monitoring profitability alongside revenue, as equal sales contribution does not necessarily imply equal business value.
-
----
-
-### Profit by Category
-
-![Bar](revenue-leakage-profitability-analytics/visualizations/Bar.png)
-
-#### Finding
-
-Category profits remain relatively close:
-
-* Clothing: ₹18.93 L
-* Furniture: ₹18.88 L
-* Electronics: ₹18.71 L
-* Grocery: ₹18.41 L
-
-#### Business Impact
-
-While revenue appears evenly distributed, profitability varies slightly between categories, suggesting opportunities for pricing and discount optimization.
-
-#### Recommendation
-
-Review pricing strategy and discount structures to improve margins in lower-performing categories.
-
----
-
-### Monthly Revenue & Profit Trend
-
-![Line](revenue-leakage-profitability-analytics/visualizations/Line.png)
-
-#### Finding
-
-Revenue remains consistently strong throughout the year, while profit fluctuates more noticeably.
-
-#### Business Impact
-
-Stable sales combined with varying profit levels indicate that profitability is influenced by factors beyond revenue alone, including discounts, costs, and transaction quality.
-
-#### Recommendation
-
-Track profit as a primary KPI alongside revenue rather than relying solely on sales performance.
-
----
-
-### Full Dashboard
+## Dashboard
 
 ![Dashboard](revenue-leakage-profitability-analytics/visualizations/Dashboard.png)
 
-The Streamlit dashboard combines KPIs, category analysis, regional performance, profitability metrics, and revenue leakage indicators into a single interactive interface.
-
-Users can:
-
-* Filter by region
-* Filter by category
-* Explore profitability trends
-* Monitor revenue leakage indicators
-* Compare revenue and profit performance
+**Four tabs:**
+- **Breakdown** — Revenue vs Profit by category, margin heatmap by region × category, payment method analysis
+- **Trends** — Monthly revenue, profit and leakage on a single chart, margin % over time, order volume
+- **Deep Dive** — Discount band impact, worst leaking segments ranked, auto-generated insight cards
+- **Orders** — Filterable table of all orders or loss-making orders only, colour-coded by profit
 
 ---
 
-## Key Insights
+## Findings
 
-* The business generated ₹2.55 Cr in revenue and ₹74.94 L in profit.
-* Overall profit margin stands at 29.37%.
-* Only 13 transactions generated losses, making them high-priority targets for investigation.
-* Revenue is distributed evenly across categories, reducing dependency risk.
-* Profitability varies independently of revenue, reinforcing the need for margin-focused decision-making.
-* Regional performance differences suggest opportunities for expansion and optimization.
+- Overall margin is 29.37% but hides segment-level variance — some region–category pairs are significantly below average
+- Loss-making orders are concentrated in high-discount transactions (20%+)
+- Revenue is evenly split across categories (~25% each) but profit is not — the margin heatmap reveals the real picture
+- Monthly revenue is stable; profit dips correlate with discount spikes, not revenue drops
 
----
+## Recommendations
 
-## Strategic Recommendations
-
-### Control Discounting
-
-Monitor high-discount transactions and establish discount thresholds to prevent unnecessary margin erosion.
-
-### Prioritize Profitability
-
-Evaluate performance using both revenue and profit metrics rather than revenue alone.
-
-### Investigate Loss-Making Orders
-
-Review the 13 loss-making transactions to identify recurring causes and prevent future leakage.
-
-### Strengthen Underperforming Regions
-
-Allocate marketing and operational resources toward regions with lower profitability potential.
-
-### Category-Level Optimization
-
-Use category profitability trends to improve pricing, inventory planning, and promotional strategies.
+- **Cap discounts at 20%** — orders above this threshold account for a disproportionate share of losses
+- **Investigate the 13 loss-making orders** — identify if they share a salesperson, customer, or promotion
+- **Use margin % as the primary KPI**, not revenue — the two move independently month-on-month
+- **Prioritise the worst region–category segment** identified in the deep dive tab for immediate pricing review
 
 ---
 
 ## Tech Stack
 
-* Python
-* MySQL
-* SQL
-* Streamlit
-* Plotly
-* Pandas
-* dotenv
-
----
-
-## Challenges
-
-* Secure database credential management
-* Data cleaning and consistency validation
-* Profitability analysis beyond simple revenue reporting
-* Translating SQL findings into business recommendations
-
----
-
-## Future Improvements
-
-* Real-time data integration
-* Automated anomaly detection
-* Revenue leakage alerts
-* Predictive profitability forecasting
-* Customer segmentation analysis
+- Python 3.11
+- SQLite (migrated from MySQL for deployment compatibility)
+- SQL — all aggregations and filters run as live queries via `pd.read_sql_query()`
+- Streamlit
+- Plotly
+- Pandas
 
 ---
 
 ## Running the Project
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/arshyanawas/revenue-leakage-dashboard
 cd revenue-leakage-profitability-analytics
 pip install -r requirements.txt
-streamlit run app.py
+python scripts/create_database.py   # builds data/sales.db from CSV
+streamlit run dashboard/app.py
 ```
-
----
-
-## Conclusion
-
-Revenue alone can create a misleading view of business performance. This project demonstrates how SQL-driven analysis can uncover hidden profitability issues, quantify revenue leakage, and support better business decisions through data-driven insights.
